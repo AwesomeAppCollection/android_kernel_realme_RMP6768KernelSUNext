@@ -18,7 +18,7 @@ jobs:
     - name: Install Compiler Toolchain Dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison build-essential ccache flex glibc-source libelf-dev libssl-dev textinfo shadow-utils target-cli-utils xz-utils zip git curl python3 liblz4-tool lz4
+        sudo apt install -y bc bison build-essential ccache flex glibc-source libelf-dev xz-utils zip git curl python3 liblz4-tool lz4
 
     - name: Clone Repository Source Code
       run: |
