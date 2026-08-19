@@ -1,0 +1,83 @@
+name: Compile Realme Pad AliKernel with KernelSU
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kernel_compile:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Maximize Build Space
+      uses: easimon/maximize-build-space@v10
+      with:
+        root-reserve-mb: 5120
+        swap-size-mb: 1024
+        remove-dotnet: 'true'
+        remove-android: 'true'
+
+    - name: Install Compiler Toolchain Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential ccache flex glibc-source libelf-dev libssl-dev textinfo shadow-utils target-cli-utils xz-utils zip git curl python3 liblz4-tool lz4
+
+    - name: Clone Repository Source Code
+      run: |
+        git clone --depth=1 https://github.com/AwesomeAppCollection/android_kernel_realme_RMP6768.git kernel-source
+
+    - name: Integrate KernelSU Core Backend
+      run: |
+        cd kernel-source
+        # Explicitly targets legacy non-GKI 4.14 compatibility branch
+        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
+
+    - name: Inject Configuration Tweaks & RAM Adjustments
+      run: |
+        cd kernel-source
+        TARGET_DEFCONFIG="RMP6768_defconfig"
+        
+        # Force-enable KernelSU compilation prerequisites
+        echo "CONFIG_MODULES=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        echo "CONFIG_KPROBES=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        echo "CONFIG_HAVE_KPROBES=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        
+        # RAM Optimization Configurations: Expanding Swap capacity
+        echo "CONFIG_ZRAM=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        echo "CONFIG_ZRAM_WRITEBACK=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        echo "CONFIG_CLEANCACHE=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+        echo "CONFIG_FRONTSWAP=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
+
+    - name: Fetch Compatible AOSP Clang 14 Toolchain
+      run: |
+        mkdir toolchain
+        cd toolchain
+        wget https://googlesource.com
+        tar -xf clang-r450784d.tar.gz
+        rm clang-r450784d.tar.gz
+
+    - name: Execute Native Build Script Compilation
+      run: |
+        export PATH=$(pwd)/toolchain/bin:$PATH
+        cd kernel-source
+        
+        # Make compiler variables accessible to your repository's native build.sh
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export HEADER_ARCH=arm64
+        export CC=clang
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+        
+        # Trigger the configuration layout mapping
+        make O=out ARCH=arm64 RMP6768_defconfig
+        
+        # Compile using all available virtual cores
+        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang
+
+    - name: Package Output Artifact Build
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-RAM-Optimized-Kernel
+        path: |
+          kernel-source/out/arch/arm64/boot/Image.gz-dtb
+          kernel-source/out/arch/arm64/boot/Image.gz
