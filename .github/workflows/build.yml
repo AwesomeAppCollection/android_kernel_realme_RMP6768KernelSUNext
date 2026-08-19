@@ -51,7 +51,7 @@ jobs:
       run: |
         mkdir toolchain
         cd toolchain
-        wget -O clang-r450784d.tar.gz https://android.googlesource.com/+archive/platform/prebuilts/clang/host/linux-x86/+/refs/heads/android13-release/clang-r450784d/
+        wget -O clang-r450784d.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d/
         tar -xzf clang-r450784d.tar.gz
         rm clang-r450784d.tar.gz
 
