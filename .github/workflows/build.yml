@@ -6,6 +6,7 @@ on:
 jobs:
   kernel_compile:
     runs-on: ubuntu-latest
+
     steps:
     - name: Maximize Build Space
       uses: easimon/maximize-build-space@v10
@@ -15,69 +16,118 @@ jobs:
         remove-dotnet: 'true'
         remove-android: 'true'
 
-    - name: Install Compiler Toolchain Dependencies
+    - name: Install Build Dependencies
       run: |
         sudo apt update
-        sudo apt install -y bc bison build-essential ccache flex libelf-dev xz-utils zip git curl python3 liblz4-tool lz4
+        sudo apt install -y \
+          bc \
+          bison \
+          build-essential \
+          ccache \
+          flex \
+          libelf-dev \
+          xz-utils \
+          zip \
+          git \
+          curl \
+          python3 \
+          liblz4-tool \
+          lz4
 
-    - name: Clone Repository Source Code
+    - name: Clone Kernel Source
       run: |
-        git clone --depth=1 https://github.com/AwesomeAppCollection/android_kernel_realme_RMP6768.git kernel-source
+        git clone --depth=1 \
+          --branch arrow-13.1 \
+          https://github.com/AwesomeAppCollection/android_kernel_realme_RMP6768.git \
+          kernel-source
 
-    - name: Integrate KernelSU Core Backend
+    - name: Integrate KernelSU
       run: |
         cd kernel-source
-        # Explicitly targets legacy non-GKI 4.14 compatibility branch
-        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
+        curl -LSs \
+          "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
+          | bash -s v0.9.5
 
-    - name: Inject Configuration Tweaks & RAM Adjustments
+    - name: Inject KernelSU Configuration
       run: |
         cd kernel-source
+
         TARGET_DEFCONFIG="RMP6768_defconfig"
-        
-        # Force-enable KernelSU compilation prerequisites
-        echo "CONFIG_MODULES=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        echo "CONFIG_KPROBES=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        echo "CONFIG_HAVE_KPROBES=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        
-        # RAM Optimization Configurations: Expanding Swap capacity
-        echo "CONFIG_ZRAM=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        echo "CONFIG_ZRAM_WRITEBACK=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        echo "CONFIG_CLEANCACHE=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
-        echo "CONFIG_FRONTSWAP=y" >> arch/arm64/configs/$TARGET_DEFCONFIG
 
-    - name: Fetch Compatible AOSP Clang 14 Toolchain
-      run: |
-        mkdir toolchain
-        cd toolchain
-        wget -O clang-r450784d.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-13.0.0_r82/clang-r450784d.tar.gz
-        tar -xzf clang-r450784d.tar.gz
-        rm clang-r450784d.tar.gz
+        cat >> arch/arm64/configs/$TARGET_DEFCONFIG <<'EOF'
+        CONFIG_MODULES=y
+        CONFIG_KPROBES=y
+        CONFIG_HAVE_KPROBES=y
+        CONFIG_KPROBE_EVENTS=y
+        CONFIG_ZRAM=y
+        CONFIG_ZRAM_WRITEBACK=y
+        CONFIG_CLEANCACHE=y
+        CONFIG_FRONTSWAP=y
+        EOF
 
-    - name: Execute Native Build Script Compilation
+    - name: Fetch Kernel Toolchains
       run: |
-        export PATH=$(pwd)/toolchain/bin:$PATH
+        git clone --depth=1 \
+          https://github.com/ArrowOS-Devices/android_prebuilts_clang_host_linux-x86_clang-r437112 \
+          clang
+
+        git clone --depth=1 \
+          https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
+          los-4.9-64
+
+        git clone --depth=1 \
+          https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
+          los-4.9-32
+
+    - name: Verify Toolchains
+      run: |
+        echo "=== Clang ==="
+        ./clang/bin/clang --version
+
+        echo "=== AArch64 GNU tools ==="
+        ./los-4.9-64/bin/aarch64-linux-android-as --version
+
+        echo "=== ARM32 GNU tools ==="
+        ./los-4.9-32/bin/arm-linux-androideabi-as --version
+
+        echo "=== LLVM linker ==="
+        ./clang/bin/ld.lld --version
+
+    - name: Build Kernel
+      run: |
         cd kernel-source
-        
-        # Make compiler variables accessible to your repository's native build.sh
+
         export ARCH=arm64
         export SUBARCH=arm64
-        export HEADER_ARCH=arm64
-        export CC=clang
-        export CROSS_COMPILE=aarch64-linux-gnu-
-        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-        
-        # Trigger the configuration layout mapping
-        make O=out ARCH=arm64 RMP6768_defconfig
-        
-        # Compile using all available virtual cores
-        make -j$(nproc --all) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CC=clang
+        export KBUILD_BUILD_HOST=localhost
+        export KBUILD_BUILD_USER=root
 
-    - name: Package Output Artifact Build
+        make O=out ARCH=arm64 RMP6768_defconfig
+
+        PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}:${GITHUB_WORKSPACE}/los-4.9-32/bin:${GITHUB_WORKSPACE}/los-4.9-64/bin" \
+        make -j"$(nproc --all)" \
+          O=out \
+          ARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE="${GITHUB_WORKSPACE}/los-4.9-64/bin/aarch64-linux-android-" \
+          CROSS_COMPILE_ARM32="${GITHUB_WORKSPACE}/los-4.9-32/bin/arm-linux-androideabi-" \
+          LLVM=1 \
+          LD=ld.lld \
+          AS=llvm-as \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          STRIP=llvm-strip \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          CONFIG_NO_ERROR_ON_MISMATCH=y
+
+    - name: Upload Kernel
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-RAM-Optimized-Kernel
+        name: KernelSU-RMP6768
         path: |
           kernel-source/out/arch/arm64/boot/Image.gz-dtb
           kernel-source/out/arch/arm64/boot/Image.gz
+          kernel-source/out/vmlinux
+          kernel-source/out/System.map
